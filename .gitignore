@@ -1,0 +1,18 @@
+# Environments
+venv/
+env/
+.env
+
+# Data and Logs
+data/
+*.csv
+*.json
+*.log
+
+# Python system files
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
