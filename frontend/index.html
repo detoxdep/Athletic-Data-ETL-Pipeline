@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Sync - Focused MVP</title>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 16px;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .prep-card {
+            background-color: #1e1e1e;
+            padding: 16px;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 400px;
+            margin-bottom: 15px;
+            border: 1px solid #333;
+        }
+        .prep-card h3 { margin-top: 0; color: #ff9500; }
+        .form-group {
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+        label { font-size: 0.85rem; color: #aaa; margin-bottom: 4px; }
+        select {
+            padding: 8px;
+            background: #2b2b2b;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 6px;
+        }
+        select:disabled {
+            background: #1a1a1a;
+            color: #666;
+            border: 1px solid #222;
+        }
+        .timer-display {
+            font-size: 3rem;
+            font-weight: bold;
+            font-family: monospace;
+            margin: 10px 0;
+            color: #4caf50;
+        }
+        .main-tap-btn {
+            width: 100%;
+            max-width: 400px;
+            height: 150px;
+            background-color: #007aff;
+            color: white;
+            font-size: 1.8rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 122, 255, 0.3);
+        }
+        .main-tap-btn:active { background-color: #0056b3; }
+        .main-tap-btn:disabled {
+            background-color: #2a2a2a;
+            color: #555;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+        .queue-container {
+            width: 100%;
+            max-width: 400px;
+            margin-top: 15px;
+        }
+        .queue-item {
+            background-color: #1e1e1e;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 5px solid #4caf50; /* Clean green accent indicating our team defaults */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="prep-card">
+        <h3>Pre-Race Parameters</h3>
+        <div class="form-group">
+            <label>Active Timing Group</label>
+            <select id="raceTypeFilter" onchange="filterRoster()">
+                <option value="Track-800m">Track - Varsity Boys 800m</option>
+                <option value="XC-Varsity">XC - Varsity Boys 5k</option>
+                <option value="XC-JV">XC - JV Boys 5k</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="timer-display" id="display">00:00.00</div>
+    <div style="margin-bottom: 10px;">
+        <button style="padding: 8px 16px; background:#4caf50; color:white; border:none; border-radius:6px; cursor:pointer;" id="startBtn" onclick="startRace()">Start Clock</button>
+        <button style="padding: 8px 16px; background:#333; color:white; border:none; border-radius:6px; cursor:pointer;" onclick="resetRace()">Reset</button>
+    </div>
+
+    <button class="main-tap-btn" id="tapBtn" onclick="recordTimestamp()" disabled>TAP SPLIT</button>
+
+    <div class="queue-container">
+        <h3>Matching Matrix</h3>
+        <div id="queueList"></div>
+    </div>
+
+    <script>
+        let startTime = null;
+        let timerInterval = null;
+
+        // Offline Storage Layer
+        const db = new Dexie("XC_MVP_Timing_DB");
+        db.version(1).stores({
+            unassignedSplits: '++id, rawTime',
+            assignedSplits: '++id, athleteId, rawTime, raceContext, syncStatus'
+        });
+
+        const masterRoster = [
+            { id: 101, name: "Alex", division: "Track-800m" },
+            { id: 102, name: "Ryan", division: "Track-800m" },
+            { id: 201, name: "Sam", division: "XC-Varsity" },
+            { id: 202, name: "Kyle", division: "XC-Varsity" },
+            { id: 301, name: "Ben", division: "XC-JV" }
+        ];
+
+        let filteredRoster = [];
+
+        window.onload = function() {
+            filterRoster();
+            renderQueueFromDB();
+        };
+
+        function filterRoster() {
+            const selectedRace = document.getElementById('raceTypeFilter').value;
+            filteredRoster = masterRoster.filter(athlete => athlete.division === selectedRace);
+            renderQueueFromDB();
+        }
+
+        function startRace() {
+            if (!startTime) {
+                startTime = performance.now();
+                timerInterval = setInterval(updateDisplay, 10);
+                
+                document.getElementById('tapBtn').disabled = false;
+                document.getElementById('raceTypeFilter').disabled = true; // Security Lock
+                document.getElementById('startBtn').innerText = "Running...";
+            }
+        }
+
+        function updateDisplay() {
+            let elapsed = performance.now() - startTime;
+            document.getElementById('display').innerText = formatTime(elapsed);
+        }
+
+        function formatTime(ms) {
+            let totalSeconds = ms / 1000;
+            let minutes = Math.floor(totalSeconds / 60);
+            let seconds = Math.floor(totalSeconds % 60);
+            let hundredths = Math.floor((ms % 1000) / 10);
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+        }
+
+        async function recordTimestamp() {
+            let elapsed = performance.now() - startTime;
+            let splitTimeStr = formatTime(elapsed);
+            
+            await db.unassignedSplits.add({
+                rawTime: splitTimeStr
+            });
+
+            renderQueueFromDB();
+        }
+
+        async function renderQueueFromDB() {
+            const listContainer = document.getElementById('queueList');
+            listContainer.innerHTML = '';
+
+            const allSplits = await db.unassignedSplits.toArray();
+
+            allSplits.forEach((split, index) => {
+                const item = document.createElement('div');
+                item.className = 'queue-item';
+                
+                let dropdownHtml = `<select onchange="assignAthlete(${split.id}, this.value)">
+                                        <option value="">Assign Name...</option>`;
+                filteredRoster.forEach(runner => {
+                    dropdownHtml += `<option value="${runner.id}">${runner.name}</option>`;
+                });
+                dropdownHtml += `</select>`;
+
+                item.innerHTML = `
+                    <span><strong>#${index + 1}</strong> — ${split.rawTime}</span>
+                    ${dropdownHtml}
+                `;
+                listContainer.appendChild(item);
+            });
+        }
+
+        async function assignAthlete(splitDatabaseId, athleteId) {
+            if (!athleteId) return;
+            
+            const splitRecord = await db.unassignedSplits.get(splitDatabaseId);
+            const activeRace = document.getElementById('raceTypeFilter').value;
+
+            await db.assignedSplits.add({
+                athleteId: parseInt(athleteId),
+                rawTime: splitRecord.rawTime,
+                raceContext: activeRace,
+                syncStatus: 'pending'
+            });
+
+            await db.unassignedSplits.delete(splitDatabaseId);
+            renderQueueFromDB();
+        }
+
+        async function resetRace() {
+            clearInterval(timerInterval);
+            startTime = null;
+            document.getElementById('display').innerText = "00:00.00";
+            document.getElementById('tapBtn').disabled = true;
+            document.getElementById('raceTypeFilter').disabled = false; // Open settings back up
+            document.getElementById('startBtn').innerText = "Start Clock";
+            await db.unassignedSplits.clear();
+            renderQueueFromDB();
+        }
+    </script>
+</body>
+</html>
