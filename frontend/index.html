@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Track Sync - Focused MVP</title>
+    <title>Track Sync - Complete Pipeline MVP</title>
     <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
     <style>
         body {
@@ -54,7 +54,7 @@
         .main-tap-btn {
             width: 100%;
             max-width: 400px;
-            height: 150px;
+            height: 120px;
             background-color: #007aff;
             color: white;
             font-size: 1.8rem;
@@ -72,6 +72,29 @@
             box-shadow: none;
             cursor: not-allowed;
         }
+        .sync-card {
+            width: 100%;
+            max-width: 400px;
+            background-color: #1e1e1e;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            border: 1px solid #222;
+            text-align: center;
+        }
+        .sync-btn {
+            width: 100%;
+            padding: 12px;
+            background-color: #ff9500;
+            color: black;
+            font-weight: bold;
+            font-size: 1.1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .sync-btn:hover { background-color: #e08400; }
         .queue-container {
             width: 100%;
             max-width: 400px;
@@ -85,7 +108,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-left: 5px solid #4caf50; /* Clean green accent indicating our team defaults */
+            border-left: 5px solid #4caf50;
         }
     </style>
 </head>
@@ -106,7 +129,7 @@
     <div class="timer-display" id="display">00:00.00</div>
     <div style="margin-bottom: 10px;">
         <button style="padding: 8px 16px; background:#4caf50; color:white; border:none; border-radius:6px; cursor:pointer;" id="startBtn" onclick="startRace()">Start Clock</button>
-        <button style="padding: 8px 16px; background:#333; color:white; border:none; border-radius:6px; cursor:pointer;" onclick="resetRace()">Reset</button>
+        <button style="padding: 8px 16px; background:#333; color:white; border:none; border-radius:6px; cursor:pointer;" onclick="resetRace()">Reset All</button>
     </div>
 
     <button class="main-tap-btn" id="tapBtn" onclick="recordTimestamp()" disabled>TAP SPLIT</button>
@@ -116,12 +139,17 @@
         <div id="queueList"></div>
     </div>
 
+    <div class="sync-card">
+        <div id="syncStatusText" style="font-size: 0.9rem; color: #aaa;">0 records pending sync.</div>
+        <button class="sync-btn" onclick="syncDataToBackend()">Sync Data to Postgres</button>
+    </div>
+
     <script>
         let startTime = null;
         let timerInterval = null;
 
-        // Offline Storage Layer
-        const db = new Dexie("XC_MVP_Timing_DB");
+        // Offline Storage Configuration
+        const db = new Dexie("XC_Pipeline_MVP_DB");
         db.version(1).stores({
             unassignedSplits: '++id, rawTime',
             assignedSplits: '++id, athleteId, rawTime, raceContext, syncStatus'
@@ -140,6 +168,7 @@
         window.onload = function() {
             filterRoster();
             renderQueueFromDB();
+            updateSyncCount();
         };
 
         function filterRoster() {
@@ -152,9 +181,8 @@
             if (!startTime) {
                 startTime = performance.now();
                 timerInterval = setInterval(updateDisplay, 10);
-                
                 document.getElementById('tapBtn').disabled = false;
-                document.getElementById('raceTypeFilter').disabled = true; // Security Lock
+                document.getElementById('raceTypeFilter').disabled = true;
                 document.getElementById('startBtn').innerText = "Running...";
             }
         }
@@ -174,19 +202,13 @@
 
         async function recordTimestamp() {
             let elapsed = performance.now() - startTime;
-            let splitTimeStr = formatTime(elapsed);
-            
-            await db.unassignedSplits.add({
-                rawTime: splitTimeStr
-            });
-
+            await db.unassignedSplits.add({ rawTime: formatTime(elapsed) });
             renderQueueFromDB();
         }
 
         async function renderQueueFromDB() {
             const listContainer = document.getElementById('queueList');
             listContainer.innerHTML = '';
-
             const allSplits = await db.unassignedSplits.toArray();
 
             allSplits.forEach((split, index) => {
@@ -200,20 +222,17 @@
                 });
                 dropdownHtml += `</select>`;
 
-                item.innerHTML = `
-                    <span><strong>#${index + 1}</strong> — ${split.rawTime}</span>
-                    ${dropdownHtml}
-                `;
+                item.innerHTML = `<span><strong>#${index + 1}</strong> — ${split.rawTime}</span>${dropdownHtml}`;
                 listContainer.appendChild(item);
             });
         }
 
         async function assignAthlete(splitDatabaseId, athleteId) {
             if (!athleteId) return;
-            
             const splitRecord = await db.unassignedSplits.get(splitDatabaseId);
             const activeRace = document.getElementById('raceTypeFilter').value;
 
+            // Save locally to the hard drive queue marked as 'pending'
             await db.assignedSplits.add({
                 athleteId: parseInt(athleteId),
                 rawTime: splitRecord.rawTime,
@@ -223,6 +242,51 @@
 
             await db.unassignedSplits.delete(splitDatabaseId);
             renderQueueFromDB();
+            updateSyncCount();
+        }
+
+        async function updateSyncCount() {
+            const pendingRecords = await db.assignedSplits.where({ syncStatus: 'pending' }).count();
+            document.getElementById('syncStatusText').innerText = `${pendingRecords} records pending sync to warehouse.`;
+        }
+
+        // ==========================================
+        // THE PIPELINE SYNCHRONIZATION EXECUTION HOOK
+        // ==========================================
+        async function syncDataToBackend() {
+            const pendingSplits = await db.assignedSplits.where({ syncStatus: 'pending' }).toArray();
+            
+            if (pendingSplits.length === 0) {
+                alert("No records to sync!");
+                return;
+            }
+
+            document.getElementById('syncStatusText').innerText = "Syncing to pipeline server...";
+
+            try {
+                // Fire an HTTP POST request across your local system directly to your Python API
+                const response = await fetch('http://127.0.0.1:8000/api/sync-splits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(pendingSplits) // Convert JavaScript database rows to clean JSON
+                });
+
+                if (response.ok) {
+                    // Success! Update local database items so they don't get double synced
+                    for (let record of pendingSplits) {
+                        await db.assignedSplits.update(record.id, { syncStatus: 'synced' });
+                    }
+                    alert("🚀 Pipeline Sync Complete! Records loaded into PostgreSQL warehouse.");
+                } else {
+                    const errorData = await response.json();
+                    alert(`Sync failed: ${errorData.detail}`);
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Could not contact the backend server. Is your Python console running?");
+            }
+
+            updateSyncCount();
         }
 
         async function resetRace() {
@@ -230,10 +294,12 @@
             startTime = null;
             document.getElementById('display').innerText = "00:00.00";
             document.getElementById('tapBtn').disabled = true;
-            document.getElementById('raceTypeFilter').disabled = false; // Open settings back up
+            document.getElementById('raceTypeFilter').disabled = false;
             document.getElementById('startBtn').innerText = "Start Clock";
             await db.unassignedSplits.clear();
+            await db.assignedSplits.clear(); // Wipes local sandbox cache
             renderQueueFromDB();
+            updateSyncCount();
         }
     </script>
 </body>

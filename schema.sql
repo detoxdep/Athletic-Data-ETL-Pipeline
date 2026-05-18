@@ -39,3 +39,20 @@ CREATE TABLE splits (
     lap_time INTERVAL NOT NULL
 );
 
+-- 1. Ensure the fallback meet exists
+INSERT INTO meets (meet_id, meet_name, meet_date, location) 
+VALUES (1, 'Time Trial / Unassigned Meet', '2026-05-18', 'Home Track')
+ON CONFLICT (meet_id) DO NOTHING;
+
+-- 2. Seed the athletes with matching IDs
+INSERT INTO athletes (athlete_id, first_name, last_name, gender, graduation_year)
+VALUES 
+    (101, 'Alex', 'TrackTeam', 'Boys', 2026),
+    (102, 'Ryan', 'TrackTeam', 'Boys', 2026),
+    (201, 'Sam', 'XCTeam', 'Boys', 2027),
+    (202, 'Kyle', 'XCTeam', 'Boys', 2027),
+    (301, 'Ben', 'JVTeam', 'Boys', 2029)
+ON CONFLICT (athlete_id) DO NOTHING;
+
+-- 3. Reset the internal ID counter so future auto-generations don't conflict
+SELECT setval(pg_get_serial_sequence('athletes', 'athlete_id'), COALESCE(MAX(athlete_id), 1)) FROM athletes;
