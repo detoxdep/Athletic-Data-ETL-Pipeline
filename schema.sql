@@ -18,7 +18,8 @@ CREATE TABLE meets (
     meet_id SERIAL PRIMARY KEY,
     meet_name VARCHAR(100) NOT NULL,
     meet_date DATE NOT NULL,
-    location VARCHAR(100) NOT NULL
+    location VARCHAR(100) NOT NULL,
+    season VARCHAR(15) NOT NULL CHECK (season IN ('Indoor', 'Outdoor', 'Cross Country'))
 );
 
 --Race Entries Table--
@@ -40,8 +41,8 @@ CREATE TABLE splits (
 );
 
 -- 1. Ensure the fallback meet exists
-INSERT INTO meets (meet_id, meet_name, meet_date, location) 
-VALUES (1, 'Time Trial / Unassigned Meet', '2026-05-18', 'Home Track')
+INSERT INTO meets (meet_id, meet_name, meet_date, location, season) 
+VALUES (1, 'Time Trial / Unassigned Meet', '2026-05-18', 'Home Track', 'Outdoor')
 ON CONFLICT (meet_id) DO NOTHING;
 
 -- 2. Seed the athletes with matching IDs
@@ -56,3 +57,14 @@ ON CONFLICT (athlete_id) DO NOTHING;
 
 -- 3. Reset the internal ID counter so future auto-generations don't conflict
 SELECT setval(pg_get_serial_sequence('athletes', 'athlete_id'), COALESCE(MAX(athlete_id), 1)) FROM athletes;
+
+SELECT 
+    a.first_name, 
+    a.last_name, 
+    s.lap_number, 
+    s.cumulative_time
+FROM splits s
+JOIN race_entries re ON s.entry_id = re.entry_id
+JOIN athletes a ON re.athlete_id = a.athlete_id;
+
+TRUNCATE TABLE splits RESTART IDENTITY;

@@ -25,6 +25,12 @@ class SplitPayload(BaseModel):
     raceContext: str
     syncStatus: str
 
+class MeetPayload(BaseModel):
+    meet_name: str
+    meet_date: str
+    location: str
+    season: str
+
 def get_db_connection():
     return psycopg2.connect(
         host=os.getenv("DB_HOST"),
